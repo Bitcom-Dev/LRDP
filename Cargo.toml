@@ -1,0 +1,10 @@
+[package]
+name = "lrdp_server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = "0.4.42"
+pem = "3.0.6"
+rand = "=0.8.5"
+rsa = { version = "=0.9.6", features = ["pem"] }
