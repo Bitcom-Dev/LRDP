@@ -2,11 +2,17 @@ use crate::utils::{decrypt_data, log};
 use std::io::{Read, Write};
 
 fn handle_tcp_connection(address: String, port: u16, _private_key: String, public_key: String) {
-    log("INFO", &format!("Listening on TCP port {}", port));
+    log("REGISTER", &format!("Listening on TCP port {}", port));
     
     std::fs::create_dir_all("devices").unwrap();
 
-    let listener = match std::net::TcpListener::bind((address, port)) {
+    let bind_address = if address == "0.0.0.0" || address == "127.0.0.1" || address == "localhost" {
+        format!("[::]:{}", port)
+    } else {
+        format!("{}:{}", address, port)
+    };
+
+    let listener = match std::net::TcpListener::bind(bind_address) {
         Ok(l) => l,
         Err(e) => {
             log("REGISTER", &format!("Failed to bind TCP listener: {}", e));
@@ -23,26 +29,23 @@ fn handle_tcp_connection(address: String, port: u16, _private_key: String, publi
                     log("REGISTER", &format!("Accepted new TCP connection from {}", _s.peer_addr().unwrap()));
                     _s.write_all(public_key.as_bytes()).unwrap();
 
-                    // 1. Read the 512-byte encrypted data block
                     let mut encrypted_buf = [0; 512];
                     if let Err(e) = _s.read_exact(&mut encrypted_buf) {
                         log("ERROR", &format!("Failed to read encrypted data from {}: {}", _s.peer_addr().unwrap(), e));
                         return;
                     }
 
-                    // 2. Read the rest of the stream to get the DER-encoded public key
                     let mut public_key_der = Vec::new();
                     if let Err(e) = _s.read_to_end(&mut public_key_der) {
                         log("ERROR", &format!("Failed to read public key from {}: {}", _s.peer_addr().unwrap(), e));
                         return;
                     }
                     
-                    log("INFO", &format!("Received {} bytes from {}", encrypted_buf.len() + public_key_der.len(), _s.peer_addr().unwrap()));
+                    log("REGISTER", &format!("Received {} bytes from {}", encrypted_buf.len() + public_key_der.len(), _s.peer_addr().unwrap()));
                     
                     let decrypted_data = decrypt_data(&encrypted_buf, &private_key);
-                    log("INFO", &format!("Decrypted data: {:?}", decrypted_data));
+                    log("REGISTER", &format!("Decrypted data: {:?}", decrypted_data));
                     
-                    // Check if decryption produced enough data
                     if decrypted_data.len() < 8 {
                         log("ERROR", "Decrypted data is too short.");
                         return;
@@ -59,20 +62,21 @@ fn handle_tcp_connection(address: String, port: u16, _private_key: String, publi
                     
                     let device = u16::from_be_bytes([device[0], device[1]]);
 
-                    log("INFO", &format!("MAC: {} Device: {:?}", mac, device));
+                    log("REGISTER", &format!("MAC: {} Device: {:?}", mac, device));
 
                     let device_folder = format!("devices/{}", device);
                     std::fs::create_dir_all(&device_folder).unwrap();
                     std::fs::write(format!("{}/mac", device_folder), mac).unwrap();
                     std::fs::write(format!("{}/last_seen", device_folder), chrono::Local::now().to_rfc3339()).unwrap();
                     
-                    // 3. Convert the received DER data back to PEM format for storage
                     let pem = pem::Pem::new(
                         "PUBLIC KEY",
                         public_key_der,
                     );
                     let pem_string = pem::encode(&pem);
                     std::fs::write(format!("{}/public_key.pem", device_folder), pem_string).unwrap();
+
+                    log("REGISTER", &format!("Device {} registered successfully.", device));
                 });
             }
             Err(e) => {
@@ -82,9 +86,44 @@ fn handle_tcp_connection(address: String, port: u16, _private_key: String, publi
     }
 }
 
-pub fn start(address: String, port: u16, protocol: u8, private_key: String, public_key: String) {
-    log("INFO", "Starting server in listener mode...");
+fn handle_udp_connection(address: String, port: u16, _private_key: String, public_key: String) {
+    log("DUMP", &format!("Listening on UDP port {}", port));
 
+    std::fs::create_dir_all("devices").unwrap();
+    let bind_address = if address == "0.0.0.0" || address == "127.0.0.1" || address == "localhost" {
+        format!("[::]:{}", port)
+    } else {
+        format!("{}:{}", address, port)
+    };
+
+    let socket = match std::net::UdpSocket::bind(bind_address) {
+        Ok(s) => s,
+        Err(e) => {
+            log("DUMP", &format!("Failed to bind UDP socket: {}", e));
+            return;
+        }
+    };
+
+    let mut buf = [0; 512];
+    loop {
+        match socket.recv_from(&mut buf) {
+            Ok((size, src)) => {
+                log("DUMP", &format!("Received {} bytes from {}", size, src));
+                // response to src with public key
+                if let Err(e) = socket.send_to(public_key.as_bytes(), src) {
+                    log("ERROR", &format!("Failed to send public key to {}: {}", src, e));
+                    continue;
+                }
+            }
+            Err(e) => {
+                log("ERROR", &format!("Failed to receive UDP packet: {}", e));
+            }
+        }
+    }
+}
+
+
+pub fn start(address: String, port: u16, protocol: u8, private_key: String, public_key: String) {
     if port == 0 {
         log("ERROR", "Port number cannot be 0.");
         return;
@@ -92,7 +131,7 @@ pub fn start(address: String, port: u16, protocol: u8, private_key: String, publ
 
     match protocol {
         0 => handle_tcp_connection(address, port, private_key, public_key),
-        1 => log("INFO", &format!("Listening on UDP port {}", port)),
+        1 => handle_udp_connection(address, port, private_key, public_key),
         _ => {
             log("ERROR", "Invalid protocol specified. Use 0 for TCP or 1 for UDP.");
             return;

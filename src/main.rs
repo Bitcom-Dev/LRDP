@@ -31,7 +31,7 @@ fn main() {
 						"1" => mode = 1,
 						"2" => mode = 2,
 						_ => {
-							println!("Error: Invalid mode specified. Use 0 for listener mode or 1 for process mode.");
+							println!("Error: Invalid mode specified. Use 0 for devices or 1 for server.");
 							helper();
 							std::process::exit(-1);	
 						}
@@ -96,9 +96,36 @@ fn main() {
 			listener::server::start(address, port, protocol, private_key, public_key);
 			std::process::exit(0);
 		},
-		2 => log("INFO", "Starting server in process mode..."),
+		2 => {
+			listener::server::start(address, port, protocol, private_key, public_key);
+			std::process::exit(0);
+		},
 		_ => {},
 	}
 
+	log("INFO", "LRDP Server starting all subprocesses...");
+	
+	let mut register_process = std::process::Command::new(std::env::current_exe().unwrap())
+		.arg("--mode")
+		.arg("1")
+		.arg("--port")
+		.arg("61234")
+		.arg("--protocol")
+		.arg("0")
+		.spawn()
+		.expect("Failed to start register subprocess");
+	
+	let mut dump_process = std::process::Command::new(std::env::current_exe().unwrap())
+		.arg("--mode")
+		.arg("1")
+		.arg("--port")
+		.arg("61235")
+		.arg("--protocol")
+		.arg("1")
+		.spawn()
+		.expect("Failed to start dump subprocess");
+
+	register_process.wait().expect("Failed to wait on register subprocess");
+	dump_process.wait().expect("Failed to wait on dump subprocess");
 	std::process::exit(0);
 }
